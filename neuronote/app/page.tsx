@@ -35,7 +35,7 @@ export default function Home() {
       {documents && documents.length === 0 && (
         <div className="py-12 flex flex-col justify-center items-center gap-8">
           <Image
-            src="/documents.svg"
+            src="/documentUpload.svg"
             width="200"
             height="200"
             alt="a picture of a girl holding documents"
