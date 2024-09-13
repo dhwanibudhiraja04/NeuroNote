@@ -16,10 +16,12 @@ export function DocumentCard({ document }: { document: Doc<"documents"> }) {
     <Card>
       <CardHeader>
         <CardTitle>{document.title}</CardTitle>
-        <CardDescription></CardDescription>
+        {/* <CardDescription>
+          {document.description || "No description available"}
+        </CardDescription> */}
       </CardHeader>
       <CardContent>
-      <div>
+        <div>
           {!document.description ? (
             <div className="flex justify-center">
               <Loader2 className="animate-spin" />
@@ -30,8 +32,8 @@ export function DocumentCard({ document }: { document: Doc<"documents"> }) {
         </div>
       </CardContent>
       <CardFooter>
-      <Button asChild variant="secondary" className="flex items-center gap-2">
-          <Link href={`/documents/${document._id}`}>
+        <Button asChild variant="secondary" className="flex items-center gap-2">
+          <Link href={`/dashboard/documents/${document._id}`}>
             <Eye className="w-4 h-4" /> View
           </Link>
         </Button>
