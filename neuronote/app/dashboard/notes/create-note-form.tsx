@@ -20,7 +20,7 @@ import { useToast } from "@/components/ui/use-toast";
 import { Toaster } from "@/components/ui/toaster"
 
 const formSchema = z.object({
-  text: z.string().min(1).max(2500),
+  text: z.string().min(1).max(5000),
 });
 
 export default function CreateNoteForm({
