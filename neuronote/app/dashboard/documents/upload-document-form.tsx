@@ -17,17 +17,23 @@ import { useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { LoadingButton } from "@/components/loading-button";
 import { Id } from "@/convex/_generated/dataModel";
+import { useOrganization } from "@clerk/nextjs";
 
-const formSchema = z.object({
-  title: z.string().min(1).max(250),
-  file: z.instanceof(File),
-});
 
 export default function UploadDocumentForm({
   onUpload,
 }: {
   onUpload: () => void;
 }) {
+  // Define FileType conditionally
+  const FileType = typeof File !== "undefined" ? File : class {};
+  
+  const formSchema = z.object({
+    title: z.string().min(1).max(250),
+    file: z.any(),
+  });
+
+  const organization = useOrganization();
   const createDocument = useMutation(api.documents.createDocument);
   const generateUploadUrl = useMutation(api.documents.generateUploadUrl);
 
@@ -39,19 +45,31 @@ export default function UploadDocumentForm({
   });
 
   async function onSubmit(values: z.infer<typeof formSchema>) {
-    const url = await generateUploadUrl();
-    const result = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": values.file.type },
-      body: values.file,
-    });
-    const { storageId } = await result.json();
-
-    await createDocument({
-      title: values.title,
-      fileId: storageId as Id<"_storage">,
-    });
-    onUpload();
+    try {
+      const url = await generateUploadUrl();
+      const result = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": values.file.type },
+        body: values.file,
+      });
+      const { storageId } = await result.json();
+  
+      if (!organization.organization?.id) {
+        // Optionally handle the case where no organization ID is available
+        alert("No organization selected or you do not have access to any organization.");
+        return;
+      }
+  
+      await createDocument({
+        title: values.title,
+        fileId: storageId as Id<"_storage">,
+        orgId: organization.organization?.id,
+      });
+      onUpload();
+    } catch (error) {
+      console.error("Failed to upload document:", error);
+      alert("Failed to upload document. Please check your access rights.");
+    }
   }
 
   return (

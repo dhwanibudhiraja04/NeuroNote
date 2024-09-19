@@ -15,6 +15,7 @@ import {
   FormLabel,
   FormMessage,
 } from "@/components/ui/form";
+import { useOrganization } from "@clerk/nextjs";
 import { LoadingButton } from "@/components/loading-button";
 
 const formSchema = z.object({
@@ -26,6 +27,7 @@ export function SearchForm({
 }: {
   setResults: (notes: typeof api.search.searchAction._returnType) => void;
 }) {
+  const organization = useOrganization();
   const searchAction = useAction(api.search.searchAction);
 
   const form = useForm<z.infer<typeof formSchema>>({
@@ -36,7 +38,10 @@ export function SearchForm({
   });
 
   async function onSubmit(values: z.infer<typeof formSchema>) {
-    await searchAction({ search: values.search }).then(setResults);
+    await searchAction({
+      search: values.search,
+      orgId: organization.organization?.id,
+    }).then(setResults);
     form.reset();
   }
 

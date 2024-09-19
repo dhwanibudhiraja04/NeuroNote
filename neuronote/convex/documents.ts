@@ -1,3 +1,4 @@
+// Updated document.ts
 import {
   MutationCtx,
   QueryCtx,
@@ -14,7 +15,6 @@ import OpenAI from "openai";
 import { Id } from "./_generated/dataModel";
 import { embed } from "./notes";
 
-// Initialize OpenAI client
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
@@ -22,18 +22,31 @@ const openai = new OpenAI({
 export async function hasAccessToDocument(
   ctx: MutationCtx | QueryCtx,
   documentId: Id<"documents">
-): Promise<{ document: any; userId: string } | null> {  // Added return type
+) {
   const userId = (await ctx.auth.getUserIdentity())?.tokenIdentifier;
+
   if (!userId) {
     return null;
   }
+
   const document = await ctx.db.get(documentId);
+
   if (!document) {
     return null;
   }
-  if (document.tokenIdentifier !== userId) {
-    return null;
+
+  if (document.orgId) {
+    const hasAccess = await hasOrgAccess(ctx, document.orgId);
+
+    if (!hasAccess) {
+      return null;
+    }
+  } else {
+    if (document.tokenIdentifier !== userId) {
+      return null;
+    }
   }
+
   return { document, userId };
 }
 
@@ -41,25 +54,66 @@ export const hasAccessToDocumentQuery = internalQuery({
   args: {
     documentId: v.id("documents"),
   },
-  async handler(ctx, args): Promise<{ document: any; userId: string } | null> {  // Added return type
+  async handler(ctx, args) {
     return await hasAccessToDocument(ctx, args.documentId);
   },
 });
 
-export const generateUploadUrl = mutation(async (ctx): Promise<string> => {  // Added return type
+export const generateUploadUrl = mutation(async (ctx) => {
   return await ctx.storage.generateUploadUrl();
 });
 
+export const hasOrgAccess = async (
+  ctx: MutationCtx | QueryCtx,
+  orgId: string
+) => {
+  const userId = (await ctx.auth.getUserIdentity())?.tokenIdentifier;
+
+  if (!userId) {
+    return false;
+  }
+
+  const membership = await ctx.db
+    .query("memberships")
+    .withIndex("by_orgId_userId", (q) =>
+      q.eq("orgId", orgId).eq("userId", userId)
+    )
+    .first();
+
+  return !!membership;
+};
+
 export const getDocuments = query({
-  async handler(ctx): Promise<any[] | undefined> {  // Added return type
+  args: {
+    orgId: v.optional(v.string()),
+  },
+  async handler(ctx, args) {
     const userId = (await ctx.auth.getUserIdentity())?.tokenIdentifier;
+
     if (!userId) {
-      return undefined;
+      return null; // Changed from undefined to null
     }
-    return await ctx.db
-      .query("documents")
-      .withIndex("by_tokenIdentifier", (q) => q.eq("tokenIdentifier", userId))
-      .collect();
+
+    if (args.orgId) {
+      const isMember = await hasOrgAccess(ctx, args.orgId);
+      if (!isMember) {
+        return null; // Changed from undefined to null
+      }
+
+      const documents = await ctx.db
+        .query("documents")
+        .withIndex("by_orgId", (q) => q.eq("orgId", args.orgId))
+        .collect();
+
+      return documents; // Will return an empty array if no documents
+    } else {
+      const documents = await ctx.db
+        .query("documents")
+        .withIndex("by_tokenIdentifier", (q) => q.eq("tokenIdentifier", userId))
+        .collect();
+
+      return documents; // Will return an empty array if no documents
+    }
   },
 });
 
@@ -67,14 +121,13 @@ export const getDocument = query({
   args: {
     documentId: v.id("documents"),
   },
-  async handler(
-    ctx,
-    args
-  ): Promise<{ documentUrl: string; [key: string]: any } | null> {  // Added return type
+  async handler(ctx, args) {
     const accessObj = await hasAccessToDocument(ctx, args.documentId);
+
     if (!accessObj) {
       return null;
     }
+
     return {
       ...accessObj.document,
       documentUrl: await ctx.storage.getUrl(accessObj.document.fileId),
@@ -86,18 +139,38 @@ export const createDocument = mutation({
   args: {
     title: v.string(),
     fileId: v.id("_storage"),
+    orgId: v.optional(v.string()),
   },
-  async handler(ctx, args): Promise<void> {  // Added return type
+  async handler(ctx, args) {
     const userId = (await ctx.auth.getUserIdentity())?.tokenIdentifier;
+
     if (!userId) {
       throw new ConvexError("Not authenticated");
     }
-    const documentId = await ctx.db.insert("documents", {
-      title: args.title,
-      tokenIdentifier: userId,
-      fileId: args.fileId,
-      description: "",
-    });
+
+    let documentId: Id<"documents">;
+
+    if (args.orgId) {
+      const isMember = await hasOrgAccess(ctx, args.orgId);
+      if (!isMember) {
+        throw new ConvexError("You do not have  this organization");
+      }
+
+      documentId = await ctx.db.insert("documents", {
+        title: args.title,
+        fileId: args.fileId,
+        description: "",
+        orgId: args.orgId,
+      });
+    } else {
+      documentId = await ctx.db.insert("documents", {
+        title: args.title,
+        tokenIdentifier: userId,
+        fileId: args.fileId,
+        description: "",
+      });
+    }
+
     await ctx.scheduler.runAfter(
       0,
       internal.documents.generateDocumentDescription,
@@ -114,12 +187,15 @@ export const generateDocumentDescription = internalAction({
     fileId: v.id("_storage"),
     documentId: v.id("documents"),
   },
-  async handler(ctx, args): Promise<void> {  // Added return type
+  async handler(ctx, args) {
     const file = await ctx.storage.get(args.fileId);
+
     if (!file) {
       throw new ConvexError("File not found");
     }
-    const text: string = await file.text();
+
+    const text = await file.text();
+
     const chatCompletion: OpenAI.Chat.Completions.ChatCompletion =
       await openai.chat.completions.create({
         messages: [
@@ -129,15 +205,15 @@ export const generateDocumentDescription = internalAction({
           },
           {
             role: "user",
-            content: `Please generate 1 sentence description for this document.`,
+            content: "please generate 1 sentence description for this document.",
           },
         ],
         model: "gpt-3.5-turbo",
       });
 
-    const description: string =
+    const description =
       chatCompletion.choices[0].message.content ??
-      "Could not generate a description for this document";
+      "could not figure out the description for this document";
 
     const embedding = await embed(description);
 
@@ -155,7 +231,7 @@ export const updateDocumentDescription = internalMutation({
     description: v.string(),
     embedding: v.array(v.float64()),
   },
-  async handler(ctx, args): Promise<void> {  // Added return type
+  async handler(ctx, args) {
     await ctx.db.patch(args.documentId, {
       description: args.description,
       embedding: args.embedding,
@@ -168,24 +244,26 @@ export const askQuestion = action({
     question: v.string(),
     documentId: v.id("documents"),
   },
-  async handler(
-    ctx,
-    args
-  ): Promise<string> {  // Added return type
-    const accessObj: { document: any; userId: string } | null = await ctx.runQuery(
+  async handler(ctx, args) {
+    const accessObj = await ctx.runQuery(
       internal.documents.hasAccessToDocumentQuery,
       {
         documentId: args.documentId,
       }
     );
+
     if (!accessObj) {
       throw new ConvexError("You do not have access to this document");
     }
-    const file: { text: () => Promise<string> } | null = await ctx.storage.get(accessObj.document.fileId);
+
+    const file = await ctx.storage.get(accessObj.document.fileId);
+
     if (!file) {
       throw new ConvexError("File not found");
     }
-    const text: string = await file.text();
+
+    const text = await file.text();
+
     const chatCompletion: OpenAI.Chat.Completions.ChatCompletion =
       await openai.chat.completions.create({
         messages: [
@@ -195,14 +273,11 @@ export const askQuestion = action({
           },
           {
             role: "user",
-            content: `Please answer this question: ${args.question}`,
+            content: `please answer this question: ${args.question}`,
           },
         ],
         model: "gpt-3.5-turbo",
       });
-
-    const response: string =
-      chatCompletion.choices[0].message.content ?? "Could not generate a response";
 
     await ctx.runMutation(internal.chats.createChatRecord, {
       documentId: args.documentId,
@@ -210,6 +285,10 @@ export const askQuestion = action({
       isHuman: true,
       tokenIdentifier: accessObj.userId,
     });
+
+    const response =
+      chatCompletion.choices[0].message.content ??
+      "could not generate a response";
 
     await ctx.runMutation(internal.chats.createChatRecord, {
       documentId: args.documentId,
@@ -226,11 +305,13 @@ export const deleteDocument = mutation({
   args: {
     documentId: v.id("documents"),
   },
-  async handler(ctx, args): Promise<void> {  // Added return type
+  async handler(ctx, args) {
     const accessObj = await hasAccessToDocument(ctx, args.documentId);
+
     if (!accessObj) {
       throw new ConvexError("You do not have access to this document");
     }
+
     await ctx.storage.delete(accessObj.document.fileId);
     await ctx.db.delete(args.documentId);
   },
